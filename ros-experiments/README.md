@@ -14,7 +14,7 @@ MATLAB and ROS 2 connect over DDS, not files. They only need the same topic (`/e
 ## Build
 
 ```bash
-cd ros2_ws
+cd ./ros-experiments/ros2_ws/
 rm -rf build install log          # only if switching envs (i.e., dev container to WSL)
 source /opt/ros/jazzy/setup.bash
 colcon build
@@ -29,7 +29,7 @@ Terminal 1 - start the subscriber (waits for messages):
 ros2 run first_pkg ego_state_listener
 ```
 
-Then run the MATLAB script. Expected output:
+Then run the MATLAB script. Expected output in Terminal 1:
 
 ```
 [INFO] [1792162198.014667983] [ego_state_listener]: [map] pos = [50.250, -1.805, 0.000]  vel = [24.995, -0.476, 0.000]
@@ -39,8 +39,10 @@ Stop with `Ctrl+C`.
 
 ## Verify
 
+Terminal 2 (any directory) - inspect the topic while MATLAB is running:
+
 ```bash
-ros2 topic list            # /ego_odom present while MATLAB runs
-ros2 topic echo /ego_odom  # raw data on the wire
-ros2 topic hz /ego_odom    # publish rate
+ros2 topic list            # confirm /ego_odom appears while MATLAB is running
+ros2 topic echo /ego_odom  # print the live message data
+ros2 topic hz /ego_odom    # measure the publish rate
 ```
