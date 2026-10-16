@@ -1,0 +1,17 @@
+name = "simulink_models"
+
+[project.labels.Classification]
+Test = [
+]
+Other = [
+]
+Design = [
+]
+Convenience = [
+]
+Derived = [
+]
+Artifact = [
+]
+None = [
+]
