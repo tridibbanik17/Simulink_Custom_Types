@@ -126,11 +126,27 @@ egoVehicle = vehicle(scnro, ...
     Name = 'Car');
 
 % Add the non-ego actors
-vehicle(scnro, ...
+%% store the other vehicle in otherCar variable
+otherCar = vehicle(scnro, ...
     ClassID = 1, ...
     Position = [14.6 5 0], ...
     Mesh = driving.scenario.carMesh, ...
     Name = 'Car1');
+
+%% Code to move the vehicle 
+% Move ego vehicle
+egoWaypoints = [4.9 5 0;
+    10 5 0;
+    20 5 0;
+    30 5 0];
+smoothTrajectory(egoVehicle, egoWaypoints, 10);
+
+% Optional: move the other car too
+otherWaypoints = [14.6 5 0;
+    25 5 0;
+    35 5 0];
+smoothTrajectory(otherCar, otherWaypoints, 8);
+%%
 
 % Display the scenario
 % plot(scnro,Waypoints = "on");

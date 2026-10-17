@@ -19,7 +19,11 @@ velocitySelector = [0 1 0 0; 0 0 0 1];
 BEP = createDemoDisplay(egoCar, sensors);
 
 %% ROS 2 publisher
+% Create ROS 2 publisher once, before the while-loop
+% Node Name: /ego_state_node
 node = ros2node("/ego_state_node");
+% TopicName: /ego_odom
+% MessageType: nav_msgs/Odometry
 odomPub = ros2publisher(node, "/ego_odom", "nav_msgs/Odometry");
 
 %% Run simulation
@@ -59,23 +63,47 @@ while advance(scenario) && ishghandle(BEP.Parent)
         snapnow
     end
 
-    egoPos = egoCar.Position;
-    egoVel = egoCar.Velocity;
+    %% 
+    % read the vehicle's current position and velocity from the scenario
+    egoPos = egoCar.Position;   % [x y z]
+    egoVel = egoCar.Velocity;   % [vx vy vz]
 
+    % creates a blank odometry message with the right type.
     msg = ros2message(odomPub);
+    % frame_id = "map" means
+    % pose is expressed in the global map frame.
     msg.header.frame_id = 'map';
+    % child_frame_id = "base_link" means
+    % the tracked body frame is the vehicle frame.
     msg.child_frame_id = 'base_link';
 
+    % pose has 2 structs: position and orientation
+    % Position: x, y, z
+    % Orientation: roll, pitch, yaw stored as a quaternion
+
+    % A quaternion is a 4-number representation of 3D orientation.
+    % It stores rotation as x, y, z, w in ROS message terms.
+    % It avoids gimbal lock, which can happen with Euler angles like roll/pitch/yaw.
     msg.pose.pose.position.x = egoPos(1);
     msg.pose.pose.position.y = egoPos(2);
     msg.pose.pose.position.z = egoPos(3);
-    msg.pose.pose.orientation.w = 1;
 
+    % pose.pose.orientation.w = 1 sets an identity quaternion, 
+    % meaning no rotation is being reported.
+    msg.pose.pose.orientation.w = 1;  
+
+    % twist has 2 structs: linear and angular
+    % Linear velocity: vx, vy, vz
+    % Angular velocity: wx, wy, wz
     msg.twist.twist.linear.x = egoVel(1);
     msg.twist.twist.linear.y = egoVel(2);
     msg.twist.twist.linear.z = egoVel(3);
 
+    % no angular velocity is set, so it stays 0.
+
+    % publish the message
     send(odomPub, msg);
+    %%
 end
 
 %% Supporting Functions
