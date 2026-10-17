@@ -45,7 +45,7 @@ while advance(scenario) && ishghandle(BEP.Parent)
                     sensorDets{j}.MeasurementNoise([1 2 4 5], [1 2 4 5]);
             end
 
-            detectionClusters = [detectionClusters; sensorDets]; %#ok<AGROW>
+            detectionClusters = [detectionClusters; sensorDets];
         end
     end
 
@@ -107,11 +107,13 @@ hBEVPlot = axes(hBEVPanel);
 frontBackLim = 60;
 BEP = birdsEyePlot('Parent', hBEVPlot, 'Xlimits', [-frontBackLim frontBackLim], 'Ylimits', [-35 35]);
 
+% radars
 for i = 1:4
     cap = coverageAreaPlotter(BEP, 'FaceColor', 'blue', 'EdgeColor', 'blue');
     plotCoverageArea(cap, sensors{i}.SensorLocation, sensors{i}.MaxRange, sensors{i}.Yaw, 45);
 end
 
+% vision sensors
 for i = 5:6
     cap = coverageAreaPlotter(BEP, 'FaceColor', 'red', 'EdgeColor', 'red');
     plotCoverageArea(cap, sensors{i}.MountingLocation(1:2), ...

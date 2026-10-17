@@ -138,3 +138,25 @@ vehicle(scnro, ...
 %    pause(scnro.SampleTime);
 % end
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
