@@ -5,7 +5,16 @@ clearvars
 close all
 clc
 
-[~, scenario, sensors] = generateSensorData();
+scenarioName="StraightRoad4Vehicles";
+f = str2func(scenarioName);
+[~, scenario, sensors] = f();
+
+%% If sensors is a single sensor object, iscell(sensors) is false, so it wraps it into a 1x1 cell array
+if ~iscell(sensors)
+    sensors = {sensors};
+end
+%%
+
 egoCar = scenario.Actors(1);
 numSensors = numel(sensors);
 
@@ -35,18 +44,31 @@ while advance(scenario) && ishghandle(BEP.Parent)
     isValidTime = false(1, numSensors);
 
     for i = 1:numSensors
-        poses = targetPoses(scenario, sensors{i}.SensorIndex);
-        [sensorDets, numValidDets, isValidTime(i)] = sensors{i}(poses, time);
+        sensor = sensors{i};
+        % If a sensor is an INS sensor (inertial navigation sensor object),
+        % it gets detections using just time.
+        % Otherwise, it gets actor poses with targetPoses(...) and 
+        % calls the sensor with poses and time.
+        % isValidTime(i) stores whether that sensor produced valid data at that time step.
+        if isa(sensor, 'insSensor')
+            [sensorDets, numValidDets, isValidTime(i)] = sensor(time);
+        else
+            poses = targetPoses(scenario, sensor.SensorIndex);
+            [sensorDets, numValidDets, isValidTime(i)] = sensor(poses, time);
+        end
 
         if numValidDets
             for j = 1:numValidDets
                 if ~isfield(sensorDets{j}.ObjectAttributes{1}, 'SNR')
                     sensorDets{j}.ObjectAttributes{1}.SNR = NaN;
                 end
-
-                sensorDets{j}.Measurement = sensorDets{j}.Measurement([1 2 4 5]);
-                sensorDets{j}.MeasurementNoise = ...
-                    sensorDets{j}.MeasurementNoise([1 2 4 5], [1 2 4 5]);
+                
+                % check that the detection has a measurement vector long enough to slice.
+                if isprop(sensorDets{j}, 'Measurement') && numel(sensorDets{j}.Measurement) >= 5
+                    sensorDets{j}.Measurement = sensorDets{j}.Measurement([1 2 4 5]);
+                    sensorDets{j}.MeasurementNoise = ...
+                        sensorDets{j}.MeasurementNoise([1 2 4 5], [1 2 4 5]);
+                end
             end
 
             detectionClusters = [detectionClusters; sensorDets];
@@ -55,7 +77,7 @@ while advance(scenario) && ishghandle(BEP.Parent)
 
     if any(isValidTime)
         confirmedTracks = updateTracks(tracker, detectionClusters, time);
-        updateBEP(BEP, egoCar, detectionClusters, confirmedTracks, positionSelector, velocitySelector);
+        updateBEP(BEP, egoCar, detectionClusters, confirmedTracks, positionSelector, velocitySelector, sensors);
     end
 
     if egoCar.Position(1) > 0 && toSnap
@@ -135,18 +157,19 @@ hBEVPlot = axes(hBEVPanel);
 frontBackLim = 60;
 BEP = birdsEyePlot('Parent', hBEVPlot, 'Xlimits', [-frontBackLim frontBackLim], 'Ylimits', [-35 35]);
 
-% radars
-for i = 1:4
-    cap = coverageAreaPlotter(BEP, 'FaceColor', 'blue', 'EdgeColor', 'blue');
-    plotCoverageArea(cap, sensors{i}.SensorLocation, sensors{i}.MaxRange, sensors{i}.Yaw, 45);
-end
+%% visualizing each sensor's coverage area
+for i = 1:numel(sensors)
+    sensor = sensors{i};
+    [mountPos, range, yaw, fov, color] = getCoverageInfo(sensor);
 
-% vision sensors
-for i = 5:6
-    cap = coverageAreaPlotter(BEP, 'FaceColor', 'red', 'EdgeColor', 'red');
-    plotCoverageArea(cap, sensors{i}.MountingLocation(1:2), ...
-        sensors{i}.RangeLimits(2), sensors{i}.MountingAngles(1), sensors{i}.FieldOfView(1));
+    if isempty(mountPos)
+        continue
+    end
+
+    cap = coverageAreaPlotter(BEP, 'FaceColor', color, 'EdgeColor', color);
+    plotCoverageArea(cap, mountPos, range, yaw, fov);
 end
+%%
 
 detectionPlotter(BEP, 'DisplayName', 'vision', 'MarkerEdgeColor', 'blue', 'Marker', '^');
 detectionPlotter(BEP, 'DisplayName', 'radar', 'MarkerEdgeColor', 'red');
@@ -159,7 +182,36 @@ ylim(BEP.Parent, [-40 40]);
 outlinePlotter(BEP, 'Tag', 'Ground truth');
 end
 
-function updateBEP(BEP, egoCar, detections, confirmedTracks, psel, vsel)
+% extract plotting settings for one sensor so the BEV (Bird's-Eye View) display can draw its coverage area.
+function [mountPos, range, yaw, fov, color] = getCoverageInfo(sensor)
+mountPos = [];
+range = [];
+yaw = 0;
+fov = 45;
+color = 'blue';
+
+if isa(sensor, 'drivingRadarDataGenerator')
+    mountPos = sensor.MountingLocation(1:2);
+    range = sensor.RangeLimits(2);
+    yaw = sensor.MountingAngles(1);
+    fov = sensor.FieldOfView(1);
+    color = 'red';
+elseif isa(sensor, 'visionDetectionGenerator')
+    mountPos = sensor.SensorLocation(1:2);
+    range = sensor.MaxRange;
+    if isprop(sensor, 'Yaw')
+        yaw = sensor.Yaw;
+    end
+    if isprop(sensor, 'FieldOfView')
+        fov = sensor.FieldOfView(1);
+    else
+        fov = 45;
+    end
+    color = 'blue';
+end
+end
+
+function updateBEP(BEP, egoCar, detections, confirmedTracks, psel, vsel, sensors)
 [lmv, lmf] = laneMarkingVertices(egoCar);
 plotLaneMarking(findPlotter(BEP, 'DisplayName', 'lane markings'), lmv, lmf);
 
@@ -175,13 +227,31 @@ N = numel(detections);
 detPos = zeros(N, 2);
 isRadar = false(N, 1);
 
-for i = 1:N
-    detPos(i,:) = detections{i}.Measurement(1:2)';
-    isRadar(i) = detections{i}.SensorIndex > 4;
+% 2 lookup arrays to understand which detection came from which sensor
+sensorIndexList = zeros(1, numel(sensors));
+sensorIsRadar = false(1, numel(sensors));
+
+for k = 1:numel(sensors)
+    sensorIndexList(k) = sensors{k}.SensorIndex;
+    sensorIsRadar(k) = isa(sensors{k}, 'drivingRadarDataGenerator');
 end
 
-plotDetection(findPlotter(BEP, 'DisplayName', 'vision'), detPos(~isRadar,:));
-plotDetection(findPlotter(BEP, 'DisplayName', 'radar'), detPos(isRadar,:));
+for i = 1:N
+    detPos(i,:) = detections{i}.Measurement(1:2)';
+    % mark whether a sensor is a radar.
+    sensorIdx = detections{i}.SensorIndex;
+    k = find(sensorIndexList == sensorIdx, 1, 'first');
+    if ~isempty(k)
+        isRadar(i) = sensorIsRadar(k);
+    end
+end
+
+if any(~isRadar)
+    plotDetection(findPlotter(BEP, 'DisplayName', 'vision'), detPos(~isRadar,:));
+end
+if any(isRadar)
+    plotDetection(findPlotter(BEP, 'DisplayName', 'radar'), detPos(isRadar,:));
+end
 
 isNotBarrier = arrayfun(@(t) t.ObjectClassID, confirmedTracks) > 0;
 confirmedTracks = confirmedTracks(isNotBarrier);
