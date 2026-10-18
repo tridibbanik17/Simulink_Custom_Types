@@ -29,13 +29,10 @@ while running
 
 
     %% fixed lines
-    allActorPoses = actorPoses(scnro);
-    egoPose = allActorPoses([allActorPoses.ActorID] == egoVehicle.ActorID);
-
     actorState = struct( ...
-        'Position', egoPose.Position, ...
-        'Velocity', egoPose.Velocity, ...
-        'Orientation', [egoPose.Roll egoPose.Pitch egoPose.Yaw]);
+        'Position', egoVehicle.Position, ...
+        'Velocity', egoVehicle.Velocity, ...
+        'Orientation', [egoVehicle.Roll egoVehicle.Pitch egoVehicle.Yaw]);
     %%
 
     time  = scnro.SimulationTime;
