@@ -5,12 +5,15 @@ clearvars
 close all
 clc
 
-scenarioName="StraightRoad4Vehicles";
-f = str2func(scenarioName);
+scenarioScriptName="StraightRoad4Vehicles";
+f = str2func(scenarioScriptName);
 [~, scenario, sensors] = f();
 
-%% If sensors is a single sensor object, iscell(sensors) is false, so it wraps it into a 1x1 cell array
-if ~iscell(sensors)
+%%
+if isempty(sensors)
+    sensors = {};
+% If sensors is a single sensor object, iscell(sensors) is false, so it wraps it into a 1x1 cell array
+elseif ~iscell(sensors)
     sensors = {sensors};
 end
 %%
