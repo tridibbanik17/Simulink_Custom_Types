@@ -33,7 +33,7 @@ while running
         'Position', egoVehicle.Position, ...
         'Velocity', egoVehicle.Velocity, ...
         'Orientation', [egoVehicle.Roll egoVehicle.Pitch egoVehicle.Yaw]);
-    %%
+    % %%
 
     time  = scnro.SimulationTime;
 

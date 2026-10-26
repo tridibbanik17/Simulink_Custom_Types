@@ -6,6 +6,7 @@ close all
 clc
 
 scenarioScriptName="StraightRoad4Vehicles";
+
 f = str2func(scenarioScriptName);
 [~, scenario, sensors] = f();
 
@@ -40,47 +41,45 @@ odomPub = ros2publisher(node, "/ego_odom", "nav_msgs/Odometry");
 
 %% Run simulation
 toSnap = true;
+
+frameTemplate = struct('Time', [], ...
+                  'ObjectDetections', {{}}, ...
+                  'LaneDetections', {{}}, ...
+                  'PointClouds', {{}}, ...
+                  'INSMeasurements', {{}});
+frameLog = frameTemplate([]);
+logIdx = 0;
+
 while advance(scenario) && ishghandle(BEP.Parent)
     time = scenario.SimulationTime;
 
-    detectionClusters = {};
-    isValidTime = false(1, numSensors);
+    objectDetections = {};
+    laneDetections = {};
+    ptClouds = {};
+    insMeas = {};
 
-    for i = 1:numSensors
-        sensor = sensors{i};
-        % If a sensor is an INS sensor (inertial navigation sensor object),
-        % it gets detections using just time.
-        % Otherwise, it gets actor poses with targetPoses(...) and 
-        % calls the sensor with poses and time.
-        % isValidTime(i) stores whether that sensor produced valid data at that time step.
-        if isa(sensor, 'insSensor')
-            [sensorDets, numValidDets, isValidTime(i)] = sensor(time);
-        else
-            poses = targetPoses(scenario, sensor.SensorIndex);
-            [sensorDets, numValidDets, isValidTime(i)] = sensor(poses, time);
-        end
+    for sensorIndex = 1:numSensors
+        sensor = sensors{sensorIndex};
+        frame = readSensorData(sensor, scenario, egoCar, time);
 
-        if numValidDets
-            for j = 1:numValidDets
-                if ~isfield(sensorDets{j}.ObjectAttributes{1}, 'SNR')
-                    sensorDets{j}.ObjectAttributes{1}.SNR = NaN;
-                end
-                
-                % check that the detection has a measurement vector long enough to slice.
-                if isprop(sensorDets{j}, 'Measurement') && numel(sensorDets{j}.Measurement) >= 5
-                    sensorDets{j}.Measurement = sensorDets{j}.Measurement([1 2 4 5]);
-                    sensorDets{j}.MeasurementNoise = ...
-                        sensorDets{j}.MeasurementNoise([1 2 4 5], [1 2 4 5]);
-                end
-            end
-
-            detectionClusters = [detectionClusters; sensorDets];
-        end
+        objectDetections = [objectDetections; frame.ObjectDetections]; %#ok<AGROW>
+        laneDetections = [laneDetections; frame.LaneDetections]; %#ok<AGROW>
+        ptClouds = [ptClouds; frame.PointClouds]; %#ok<AGROW>
+        insMeas = [insMeas; frame.INSMeasurements]; %#ok<AGROW>
     end
+    
+    logIdx = logIdx + 1;
+    frameLog(logIdx) = struct('Time', time, ...
+                              'ObjectDetections', {objectDetections}, ...
+                              'LaneDetections', {laneDetections}, ...
+                              'PointClouds', {ptClouds}, ...
+                              'INSMeasurements', {insMeas}); 
 
-    if any(isValidTime)
+    detectionClusters = normalizeObjectDetections(objectDetections);
+
+    if ~isempty(detectionClusters)
         confirmedTracks = updateTracks(tracker, detectionClusters, time);
-        updateBEP(BEP, egoCar, detectionClusters, confirmedTracks, positionSelector, velocitySelector, sensors);
+        updateBEP(BEP, egoCar, detectionClusters, confirmedTracks, positionSelector, velocitySelector);
     end
 
     if egoCar.Position(1) > 0 && toSnap
@@ -131,6 +130,8 @@ while advance(scenario) && ishghandle(BEP.Parent)
     %%
 end
 
+frameLog = frameLog(1:logIdx);
+
 %% Supporting Functions
 function filter = initSimDemoFilter(detection)
 H = [1 0 0 0; 0 0 1 0; 0 1 0 0; 0 0 0 1];
@@ -165,7 +166,7 @@ for i = 1:numel(sensors)
     sensor = sensors{i};
     [mountPos, range, yaw, fov, color] = getCoverageInfo(sensor);
 
-    if isempty(mountPos)
+    if isempty(mountPos) || isempty(range)
         continue
     end
 
@@ -174,8 +175,7 @@ for i = 1:numel(sensors)
 end
 %%
 
-detectionPlotter(BEP, 'DisplayName', 'vision', 'MarkerEdgeColor', 'blue', 'Marker', '^');
-detectionPlotter(BEP, 'DisplayName', 'radar', 'MarkerEdgeColor', 'red');
+detectionPlotter(BEP, 'DisplayName', 'detections', 'MarkerEdgeColor', 'blue', 'Marker', '^');
 laneMarkingPlotter(BEP, 'DisplayName', 'lane markings');
 trackPlotter(BEP, 'DisplayName', 'track', 'HistoryDepth', 10);
 
@@ -194,27 +194,67 @@ fov = 45;
 color = 'blue';
 
 if isa(sensor, 'drivingRadarDataGenerator')
-    mountPos = sensor.MountingLocation(1:2);
-    range = sensor.RangeLimits(2);
-    yaw = sensor.MountingAngles(1);
-    fov = sensor.FieldOfView(1);
+    if isprop(sensor, 'MountingLocation')
+        mountPos = sensor.MountingLocation(1:2);
+    end
+    if isprop(sensor, 'RangeLimits')
+        range = sensor.RangeLimits(2);
+    end
+    if isprop(sensor, 'MountingAngles')
+        yaw = sensor.MountingAngles(1);
+    end
+    if isprop(sensor, 'FieldOfView')
+        fov = sensor.FieldOfView(1);
+    end
     color = 'red';
+
 elseif isa(sensor, 'visionDetectionGenerator')
-    mountPos = sensor.SensorLocation(1:2);
-    range = sensor.MaxRange;
+    if isprop(sensor, 'SensorLocation')
+        mountPos = sensor.SensorLocation(1:2);
+    end
+    if isprop(sensor, 'MaxRange')
+        range = sensor.MaxRange;
+    end
     if isprop(sensor, 'Yaw')
         yaw = sensor.Yaw;
     end
     if isprop(sensor, 'FieldOfView')
         fov = sensor.FieldOfView(1);
-    else
-        fov = 45;
     end
     color = 'blue';
+
+elseif isa(sensor, 'ultrasonicDetectionGenerator')
+    if isprop(sensor, 'MountingLocation')
+        mountPos = sensor.MountingLocation(1:2);
+    end
+    if isprop(sensor, 'RangeLimits')
+        range = sensor.RangeLimits(2);
+    elseif isprop(sensor, 'MaxRange')
+        range = sensor.MaxRange;
+    end
+    if isprop(sensor, 'MountingAngles')
+        yaw = sensor.MountingAngles(1);
+    end
+    if isprop(sensor, 'FieldOfView')
+        fov = sensor.FieldOfView(1);
+    end
+    color = 'magenta';
+
+elseif isa(sensor, 'lidarPointCloudGenerator')
+    if isprop(sensor, 'SensorLocation')
+        mountPos = sensor.SensorLocation(1:2);
+    end
+    if isprop(sensor, 'RangeLimits')
+        range = sensor.RangeLimits(2);
+    elseif isprop(sensor, 'MaxRange')
+        range = sensor.MaxRange;
+    end
+    color = 'green';
+
 end
 end
 
-function updateBEP(BEP, egoCar, detections, confirmedTracks, psel, vsel, sensors)
+function updateBEP(BEP, egoCar, detections, confirmedTracks, psel, vsel)
 [lmv, lmf] = laneMarkingVertices(egoCar);
 plotLaneMarking(findPlotter(BEP, 'DisplayName', 'lane markings'), lmv, lmf);
 
@@ -228,40 +268,147 @@ plotBarrierOutline(findPlotter(BEP, 'Tag', 'Ground truth'), numBarrierSegments, 
 
 N = numel(detections);
 detPos = zeros(N, 2);
-isRadar = false(N, 1);
-
-% 2 lookup arrays to understand which detection came from which sensor
-sensorIndexList = zeros(1, numel(sensors));
-sensorIsRadar = false(1, numel(sensors));
-
-for k = 1:numel(sensors)
-    sensorIndexList(k) = sensors{k}.SensorIndex;
-    sensorIsRadar(k) = isa(sensors{k}, 'drivingRadarDataGenerator');
-end
 
 for i = 1:N
-    detPos(i,:) = detections{i}.Measurement(1:2)';
-    % mark whether a sensor is a radar.
-    sensorIdx = detections{i}.SensorIndex;
-    k = find(sensorIndexList == sensorIdx, 1, 'first');
-    if ~isempty(k)
-        isRadar(i) = sensorIsRadar(k);
-    end
+    z = detections{i}.Measurement(:);
+    detPos(i,:) = z(1:2).';
 end
 
-if any(~isRadar)
-    plotDetection(findPlotter(BEP, 'DisplayName', 'vision'), detPos(~isRadar,:));
+if N > 0
+    plotDetection(findPlotter(BEP, 'DisplayName', 'detections'), detPos);
 end
-if any(isRadar)
-    plotDetection(findPlotter(BEP, 'DisplayName', 'radar'), detPos(isRadar,:));
+
+if isempty(confirmedTracks)
+    return 
 end
 
 isNotBarrier = arrayfun(@(t) t.ObjectClassID, confirmedTracks) > 0;
 confirmedTracks = confirmedTracks(isNotBarrier);
+
+if isempty(confirmedTracks)
+    return 
+end
 
 trackIDs = {confirmedTracks.TrackID};
 labels = cellfun(@num2str, trackIDs, 'UniformOutput', false);
 [tracksPos, tracksCov] = getTrackPositions(confirmedTracks, psel);
 tracksVel = getTrackVelocities(confirmedTracks, vsel);
 plotTrack(findPlotter(BEP, 'DisplayName', 'track'), tracksPos, tracksVel, tracksCov, labels);
+end
+
+function frame = readSensorData(sensor, scenario, egoCar, time)
+frame = struct('ObjectDetections', {{}}, ...
+               'LaneDetections', {{}}, ...
+               'PointClouds', {{}}, ...
+               'INSMeasurements', {{}}, ...
+               'IsValid', false);
+
+if isa(sensor, "insSensor")
+    poses = actorPoses(scenario);
+    egoPose = poses([poses.ActorID] == egoCar.ActorID);
+
+    if isempty(egoPose)
+        return
+    end
+
+    actorState = struct( ...
+        'Position', egoPose.Position, ...
+        'Velocity', egoPose.Velocity, ...
+        'Orientation', [egoPose.Roll egoPose.Pitch egoPose.Yaw]);
+
+    frame.INSMeasurements = {sensor(actorState, time)};
+    frame.IsValid = true;
+    return
+end
+
+if isa(sensor, "lidarPointCloudGenerator")
+    [ptCloud, isValid] = sensor();
+    frame.PointClouds = {ptCloud};
+    frame.IsValid = isValid;
+    return
+end
+
+if ~isprop(sensor, 'SensorIndex')
+    return
+end
+
+poses = targetPoses(scenario, sensor.SensorIndex);
+
+isValid = false;
+
+if isa(sensor, "visionDetectionGenerator")
+    outputType = string(sensor.DetectorOutput);
+
+    if outputType == "Objects only"
+        [objDets, numObjects, isValid] = sensor(poses, time);
+        frame.ObjectDetections = objDets(1:numObjects);
+
+    elseif outputType == "Lanes only"
+        maxLaneDetectionRange = min(500, sensor.MaxRange);
+        lanes = laneBoundaries(egoCar, 'XDistance', linspace(-maxLaneDetectionRange, maxLaneDetectionRange, 101));
+        [laneDets, ~, isValid] = sensor(lanes, time);
+        frame.LaneDetections = laneDets;
+
+    elseif outputType == "Lanes and objects"
+        maxLaneDetectionRange = min(500, sensor.MaxRange);
+        lanes = laneBoundaries(egoCar, 'XDistance', linspace(-maxLaneDetectionRange, maxLaneDetectionRange, 101));
+        [objDets, numObjects, isValidObj, laneDets, ~, isValidLane] = sensor(poses, lanes, time);
+        frame.ObjectDetections = objDets(1:numObjects);
+        frame.LaneDetections = laneDets;
+        isValid = isValidObj || isValidLane;
+
+    elseif outputType == "Lanes with occlusion"
+        maxLaneDetectionRange = min(500, sensor.MaxRange);
+        lanes = laneBoundaries(egoCar, 'XDistance', linspace(-maxLaneDetectionRange, maxLaneDetectionRange, 101));
+        [laneDets, ~, isValid] = sensor(poses, lanes, time);
+        frame.LaneDetections = laneDets;
+    end
+
+    frame.IsValid = isValid;
+    return
+end
+
+if isa(sensor, "drivingRadarDataGenerator")
+    [objDets, numObjects, isValid] = sensor(poses, time);
+    frame.ObjectDetections = objDets(1:numObjects);
+    frame.IsValid = isValid;
+    return
+end
+
+if isa(sensor, "ultrasonicDetectionGenerator")
+    [objDets, isValid] = sensor(poses, time);
+    frame.ObjectDetections = objDets;
+    frame.IsValid = isValid;
+    return
+end
+end
+
+function detectionsOut = normalizeObjectDetections(detectionsIn)
+detectionsOut = {};
+
+for i = 1:numel(detectionsIn)
+    d = detectionsIn{i};
+
+    if ~isprop(d, "Measurement") || numel(d.Measurement) < 2
+        continue
+    end
+
+    z = d.Measurement(:);
+
+    if numel(z) >= 4
+        z = z(1:4);   % [x y vx vy]
+        if isprop(d, "MeasurementNoise") && size(d.MeasurementNoise,1) >= 4 && size(d.MeasurementNoise,2) >= 4
+            R = d.MeasurementNoise(1:4, 1:4);
+        else
+            R = eye(4);
+        end
+    else
+        z = [z(1); z(2); 0; 0];
+        R = diag([10 10 100 100]);
+    end
+
+    d.Measurement = z;
+    d.MeasurementNoise = R;
+    detectionsOut{end+1,1} = d; %#ok<AGROW>
+end
 end

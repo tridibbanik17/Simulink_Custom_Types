@@ -5,7 +5,7 @@ clearvars
 close all
 clc
 
-scenarioScriptName="All5Sensors";
+scenarioScriptName="CarsInOppositeDirection";
 f = str2func(scenarioScriptName);
 [~, scenario, sensors] = f();
 
